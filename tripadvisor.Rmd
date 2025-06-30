@@ -1,0 +1,389 @@
+---
+#title: "Evaluating Classification Models"
+output:
+  html_document: default
+  pdf_document: default
+#date: "2024-10-17"
+---
+## Evaluating classification models
+
+Classification in text analysis is a supervised machine learning technique to predict the predefined category to which a document belongs. In this dataset, the predefined category is  sentiment polarity (positive or negative) of hotel reviews. To execute classification, two subsets of data are required: training data to train the classifier and test data to validate it. Here, I have used the Naive Bayes model for classification. The Naive Bayes model is computationally more efficient than Linear Support Vector Machines model. I have evaluated the model using confusion matrix and cross validation. 
+
+This dataset consists of 410308 reviews of hotels in three cities of San Francisco, Washington DC and New York extracted from Tripadvisor website.
+
+
+First, I will load required libraries. I need quanteda and quanteda.textmodels for creating document feature matrix and evaluating models.
+```{r}
+library(tidyverse)
+library(ggplot2)
+require(lattice)
+library(quanteda)
+library(quanteda.textmodels)
+library(quanteda.textplots)
+library(quanteda.textstats)
+library(readtext)
+library(jsonlite)
+```
+
+I will load both reviews and offerings datasets. Reviews dataset includes reviews as well as ratings by customers. Offerings include all the information about the hotel including the hotel's name, the city in which the hotel is located, its class, and a hotel id.   
+```{r}
+tripadvisor_reviews = read.csv(file = "reviews.csv", header = TRUE)
+```
+
+```{r}
+dim(tripadvisor_reviews)
+```
+
+```{r}
+tripadvisor_offerings = read.csv(file = "offerings.csv", header = TRUE)
+```
+
+```{r}
+hotels_id <- unique(tripadvisor_offerings$id)
+```
+
+```{r}
+length(hotels_id)
+```
+There are reviews of 4333 hotels in this dataset.
+
+In the reviews dataset, there is a column called "ratings" which include 7 scores such as overall score, service, cleanliness, value, location, sleep quality and rooms. I will separate these ratings and create columns for each.
+
+```{r}
+#Dictionaries in the ratings column use single quotes instead of double quotes which is not a valid json. First, I replace single quotes with double quotes in the 'ratings' column.
+
+tripadvisor_reviews$ratings <- gsub("'", '"', tripadvisor_reviews$ratings)
+
+#Then I convert to JSON format.
+
+tripadvisor_reviews$ratings <- lapply(tripadvisor_reviews$ratings, fromJSON)
+```
+
+Using uunest_wider, ratings column is split into 7 columns.
+```{r}
+tripadvisor_split_columns <- tripadvisor_reviews %>%
+  unnest_wider(ratings)
+tripadvisor_split_columns
+```
+
+Similarly, in the offerings dataset, there is a column "address" which includes the region, street address, postal code and locality. I will split this column into 4 categories.
+
+```{r}
+tripadvisor_offerings$address <- gsub("'", '"', tripadvisor_offerings$address)
+```
+
+```{r}
+tripadvisor_offerings$address <- gsub('O"', 'O', tripadvisor_offerings$address)
+
+tripadvisor_offerings$address <- gsub('Mary"s', 'Marys', tripadvisor_offerings$address)
+
+tripadvisor_offerings$address <- gsub('"630 "F" Street"', '"630 F Street"', tripadvisor_offerings$address)
+
+tripadvisor_offerings$address <- gsub('"4143 Governor"s Row"', '"4143 Governors Row"', tripadvisor_offerings$address)
+
+tripadvisor_offerings$address <- gsub('"CO', '"CO"', tripadvisor_offerings$address)
+
+tripadvisor_offerings$address <- gsub('"480 L"Enfant Plaza"', '"480 LEnfant Plaza"', tripadvisor_offerings$address)
+```
+
+
+```{r}
+tripadvisor_offerings$address <- lapply(tripadvisor_offerings$address, fromJSON)
+```
+
+```{r}
+tripadvisor_offerings_split <- tripadvisor_offerings %>%
+  unnest_wider(address)
+tripadvisor_offerings_split
+```
+
+
+I will merge the 2 datasets using id, but before merging, I need to change the name of column "id" in offerings dataset to "offering_id":
+```{r}
+tripadvisor_offerings_split <- tripadvisor_offerings_split %>%
+  rename(offering_id = id)
+```
+
+Merging two datasets
+```{r}
+tripadvisor <- merge(tripadvisor_split_columns,tripadvisor_offerings_split, by=c("offering_id")
+)
+```
+
+I'll have a look at reviews with the overall score of 3.
+
+```{r}
+tripadvisor_overall_3 <- tripadvisor %>%
+  filter(overall == 3) %>%
+  select(text, overall, title)
+
+```
+There are both good and bad reviews with the overall rating of 3.
+
+I will create a column "polarity" which divides data to negative and positive reviews based on customer ratings.
+```{r}
+
+tripadvisor <- tripadvisor %>%
+  mutate(
+    polarity = ifelse(
+      overall >= 4
+      |service >= 4
+      |cleanliness >= 4
+      |value >= 4
+      |location >= 4
+      |sleep_quality >= 4
+      |rooms >= 4 , "positive", "negative"  
+    )
+  )
+
+unique(tripadvisor$polarity)
+```
+
+Hotels are located in these cities:
+```{r}
+unique(tripadvisor$locality)
+```
+There are 25 cities in the data. I have randomly selected 3 cities because of the data set being so large.   
+```{r}
+tripadvisor <- tripadvisor %>% filter(locality == "San Francisco" | locality == "Washington DC" | locality == "New York City")
+```
+
+```{r}
+dim(tripadvisor)
+```
+Now, we have a column with negative and positive reviews based on customer ratings. Let's have a look how many positive and how many negative reviews there are. 
+```{r}
+table(tripadvisor$polarity)
+```
+I need testing and training data. So, I will randomly divide the data into training and test data. I will create another column called "Set" with the labels training and test.
+```{r}
+tripadvisor %>% count(polarity)
+```
+I will only keep those reviews that have ratings by customers:
+```{r}
+tripadvisor <- tripadvisor %>% 
+  filter(polarity == "positive" | polarity == "negative")
+
+tripadvisor %>% count(polarity)
+```
+
+```{r}
+tripadvisor <- tripadvisor %>%
+  group_by(polarity) %>%
+  mutate(
+    set = ifelse(row_number() <= n()/2, "train","test")
+    )
+```
+
+```{r}
+table(tripadvisor$polarity, tripadvisor$set)
+```
+
+I need to create a corpus from a data frame:
+```{r}
+corp_tripadvisor <- corpus(tripadvisor, text_field = "text")
+
+```
+
+I'll explore the corpus.
+```{r}
+head(docvars(corp_tripadvisor))
+```
+Summary() function shows the number of types, tokens and sentences in each review. 
+```{r}
+head(summary(corp_tripadvisor), 20)
+```
+I'll have a look at the first review.
+```{r}
+corp_tripadvisor[1] %>%
+  cat()
+```
+I will tokenise data and create a document feature matrix.
+```{r}
+tripadvisor_toks <- tokens(corp_tripadvisor, remove_punct = TRUE, remove_symbols = TRUE) %>%
+  tokens_remove(stopwords("en")) %>%
+  tokens_tolower()
+  
+tripadvisor_toks
+```
+I will create a document feature matrix.
+```{r}
+tripadvisor_dfmat <- tripadvisor_toks %>%
+  dfm()
+```
+
+
+I split the data into positive and negative sentiment.
+```{r}
+dfmat_positive <- dfm_subset(tripadvisor_dfmat, polarity == "positive")
+
+dfmat_negative <- dfm_subset(tripadvisor_dfmat, polarity == "negative")
+```
+
+
+I'll have a look at the top features in the negative and positive subsets using topfeatures() function.
+```{r}
+print(topfeatures(dfmat_positive))
+```
+
+```{r}
+print(topfeatures(dfmat_negative))
+```
+
+I can also use textstat_frequency() function to view the top features by sentiment.
+```{r}
+textstat_frequency(tripadvisor_dfmat, n = 15, groups = polarity)
+```
+
+
+### Evaluating classification models  
+
+I need to separate the training and test sets by subsetting the document feature matrix into two separate training and test matrices. I set the minimum term frequency to 10 to eliminate less frequently occuring terms.
+```{r}
+dfmat_train <- dfm_subset(tripadvisor_dfmat, set == "train") %>% 
+  dfm_trim(min_termfreq = 10)
+  
+```
+
+```{r}
+dfmat_test <- dfm_subset(tripadvisor_dfmat, set == "test") %>% 
+  dfm_trim(min_termfreq = 10)
+```
+
+Training the Naive Bayes classifier
+
+First, I indicate the data which I want to train. I indicate y as outcome of interest, in this case polarity.
+```{r}
+tripadvisor_nb <- textmodel_nb(dfmat_train, y = dfmat_train$polarity)
+  
+```
+
+Now that I have trained the classifier, I can use it to predict polarity in the test data.
+```{r}
+tripadvisor_nb_test <- predict(tripadvisor_nb, newdata = dfmat_test, force = TRUE)
+
+```
+Force = True is our way of telling the function that if it encounters features that were not found in the training dataset, then these should be dropped. 
+
+#### Model Evaluation
+
+I need to know whether the model can issue reliable and accurate predictions. To assess the performance of the model, these measures are used:
+1. Accuracy
+2. Confusion Matrix
+3. Precision and Recall
+
+##### Confusion matrix
+
+Confusion matrix looks at categories and determines which of these categories the model has successfully or unsuccessfully classified.
+
+```{r}
+confmat_nb <- table(tripadvisor_nb_test, dfmat_test$polarity)[2:1, 2:1]
+
+confmat_nb
+
+```
+There are 739 reviews that are classified as negative which is not a significant number compared  with the number of positive reviews classified as positive. However, a significant number of negative reviews have been classified as positive.
+
+##### Accuracy 
+
+Accuracy determines how often the model is correct in predicting into which category a document falls.
+(true positives + true negatives) / ( all predictions)
+
+I use the diag() function which will extract the diagonal of a matrix: the true positives and true negatives
+```{r}
+print(sum(diag(confmat_nb)) / sum(confmat_nb))
+```
+
+##### Precision
+
+In this dataset, where the predicted classes are imbalanced, the precision and recall are more helpful and show how the model has performed.
+Precision measures what proportion of predicted positive reviews are actually positive.
+true positives / (true positives + false positives)
+```{r}
+prec <- print(confmat_nb[1, 1] / sum(confmat_nb[1, ]))
+```
+
+##### Recall
+
+Recall measures what proportion of all positive cases are correctly predicted 
+true positives / (true positives + false negatives)
+```{r}
+rec <- print(confmat_nb[1, 1] / sum(confmat_nb[, 1]))
+```
+##### F1 Score
+
+We combine precision and recall into a single quantity called F1 score: 
+2 * (Recall * Precision) / (Recall + Precision)
+```{r}
+f1 <- 2 * (rec * prec) / (rec + prec)
+f1
+```
+
+##### Cross validation
+
+Cross validation is a process of evaluating the model that relies on splitting the data and evaluating it segment by segment. Cross validation is used to avoid overfitting a model.
+```{r}
+set.seed(50)
+tripadvisor_dfmat$split <- as.integer(cut(sample(seq_len(ndoc(tripadvisor_dfmat))), breaks = 5))
+
+```
+
+```{r}
+table(tripadvisor_dfmat$split)
+```
+```{r}
+#Distribution of sentiment
+with(docvars(tripadvisor_dfmat), table(polarity, split))
+```
+```{r}
+acc <- numeric()
+```
+
+```{r}
+for (i in seq_len(5)) {
+  
+    dfmat_train2 <- tripadvisor_dfmat %>%
+        dfm_subset(split != i) %>%
+        dfm_trim(min_termfreq = 5)
+
+    dfmat_test2 <- dfm_subset(tripadvisor_dfmat, split == i)
+
+    tmod <- textmodel_nb(dfmat_train, y = dfmat_train$polarity)
+                                            
+    pred <- suppressWarnings(predict(tmod, newdata = dfmat_test, force = TRUE))
+    
+    confmat <- table(pred, dfmat_test$polarity)
+    
+    acc <- c(acc, sum(diag(confmat)) / sum(confmat))
+}
+```
+
+```{r}
+print(acc)
+print(mean(acc))
+```
+
+Visualizing the model
+
+First, I create a dataframe object with desired variables from a test set.
+```{r}
+prediction_df <- data.frame(id = docnames(dfmat_test),
+                      Prediction = tripadvisor_nb_test,
+                      Rating = dfmat_test$overall)
+
+head(prediction_df)
+```
+Now, I visualise prediction vs overall rating to observe how the classifier did in predicting polarity.
+```{r}
+ggplot(prediction_df, aes(x = Prediction, y = Rating)) +
+  geom_boxplot()
+```
+
+It is obvious that the model has performed well in predicting polarity of reviews. The mean for the negative reviews is 2 and it's 5 for positive reviews. 
+
+
+
+
+
+
+
