@@ -1,1 +1,3 @@
-# tripadvisor_rstudio
+# Tripadvisor Review Analysis
+
+In this RStudio project, I have analysed TripAdvisor hotel reviews and deployed Naïve Bayes model to classify reviews into negative and positive. The project involves cleaning the data, creating a corpus, processing the text through tokenization, transforming tokens into a matrix of token features, training the Naïve Bayes classifier and evaluating the model using confusion matrix, F1 score and cross-validation.
